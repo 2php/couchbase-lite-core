@@ -10,6 +10,7 @@
 #include "HTTPTypes.hh"
 #include "function_ref.hh"
 #include "fleece/Fleece.hh"
+#include "sockpp/socket.h"
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -151,8 +152,8 @@ namespace litecore { namespace net {
         size_t _unreadLen {0};              // Length of valid data in _unread
         bool _eofOnRead {false};            // Has read stream reached EOF?
         bool _eofOnWrite {false};           // Has write stream reached EOF?
-        int _interruptReadFD {-1};          // File descriptor of pipe used to interrupt select()
-        int _interruptWriteFD {-1};         // Other end of the pipe used to interrupt select()
+        socket_t _interruptReadFD {INVALID_SOCKET};          // File descriptor of pipe used to interrupt select()
+        socket_t _interruptWriteFD {INVALID_SOCKET};         // Other end of the pipe used to interrupt select()
         std::mutex _mutex;                  // Synchronizes creation of the above FDs
     };
 

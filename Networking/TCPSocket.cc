@@ -44,7 +44,11 @@
 #pragma clang diagnostic pop
 
 #ifndef _WIN32
-#define cbl_strerror strerror
+#define tcp_read ::read
+#define tcp_write ::write
+#else
+#define tcp_read(s, buf, len) ::recv(s, (char *)(buf), len, 0)
+#define tcp_write(s, buf, len) ::send(s, (const char *)(buf), len, 0)
 #endif
 
 namespace litecore { namespace net {
@@ -56,78 +60,6 @@ namespace litecore { namespace net {
 
 
     static int lastSocketsError();
-
-
-#ifdef _WIN32
-    static string cbl_strerror(int err) {
-        if(err < sys_nerr) {
-            // As of Windows 10, only errors 0 - 42 have a message in strerror
-            return strerror(err);
-        }
-
-        // Hope the POSIX definitions don't change...
-        if(err < 100 || err > 140) {
-            return "Unknown Error";
-        }
-
-        static long wsaEquivalent[] = {
-            WSAEADDRINUSE,
-            WSAEADDRNOTAVAIL,
-            WSAEAFNOSUPPORT,
-            WSAEALREADY,
-            0,
-            WSAECANCELLED,
-            WSAECONNABORTED,
-            WSAECONNREFUSED,
-            WSAECONNRESET,
-            WSAEDESTADDRREQ,
-            WSAEHOSTUNREACH,
-            0,
-            WSAEINPROGRESS,
-            WSAEISCONN,
-            WSAELOOP,
-            WSAEMSGSIZE,
-            WSAENETDOWN,
-            WSAENETRESET,
-            WSAENETUNREACH,
-            WSAENOBUFS,
-            0,
-            0,
-            0,
-            WSAENOPROTOOPT,
-            0,
-            0,
-            WSAENOTCONN,
-            0,
-            WSAENOTSOCK,
-            0,
-            WSAEOPNOTSUPP,
-            0,
-            0,
-            0,
-            0,
-            WSAEPROTONOSUPPORT,
-            WSAEPROTOTYPE,
-            0,
-            WSAETIMEDOUT,
-            0,
-            WSAEWOULDBLOCK
-        };
-
-        const long equivalent = wsaEquivalent[err - 100];
-        if(equivalent == 0) {
-            return "Unknown Error";
-        }
-
-        char buf[1024];
-        buf[0] = '\x0';
-        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			nullptr, equivalent, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-			buf, sizeof(buf), nullptr);
-        return string(buf);
-    }
-#endif
-
     static constexpr size_t kInitialDelimitedReadBufferSize = 1024;
 
 
@@ -546,7 +478,7 @@ namespace litecore { namespace net {
             writeable = FD_ISSET(sockfd, &writeSet);
             message   = 0;
             if (FD_ISSET(_interruptReadFD, &readSet))
-                cbl_read(_interruptReadFD, &message, sizeof(message));
+                tcp_read(_interruptReadFD, &message, sizeof(message));
         }
 
         LOG(Debug, "...after waitForIO: readable=%d, writeable=%d, interruption=%d",
@@ -559,7 +491,7 @@ namespace litecore { namespace net {
         if (!createInterruptPipe())
             return false;
         LOG(Debug, "Interrupting waitForIO with %d", message);
-        if (cbl_write(_interruptWriteFD, &message, sizeof(message)) < 0) {
+        if (tcp_write(_interruptWriteFD, &message, sizeof(message)) < 0) {
             setError(POSIXDomain, lastSocketsError());
             return false;
         }
@@ -573,7 +505,7 @@ namespace litecore { namespace net {
         // we can use the data written to the pipe as a message, to let the client that called
         // waitForIO know what happened.
         lock_guard<mutex> lock(_mutex);
-        if (_interruptReadFD >= 0)
+        if (_interruptReadFD >= 0 && _interruptReadFD != INVALID_SOCKET)
             return true;
 
 #ifndef _WIN32
@@ -587,6 +519,7 @@ namespace litecore { namespace net {
 #else
         // On Windows, pipes aren't available so we have to create a pair of TCP sockets
         // connected through the loopback interface. <https://stackoverflow.com/a/3333565/98077>
+
         tcp_acceptor acc(inet_address(INADDR_LOOPBACK, 0));
         if (!checkSocket(acc))
             return false;
@@ -649,6 +582,7 @@ namespace litecore { namespace net {
             {WSA_INVALID_HANDLE, EBADF},
             {WSA_NOT_ENOUGH_MEMORY, ENOMEM},
             {WSA_INVALID_PARAMETER, EINVAL},
+            {WSAEINVAL, EINVAL},
             {WSAECONNREFUSED, ECONNREFUSED},
             {WSAEADDRINUSE, EADDRINUSE},
             {WSAEADDRNOTAVAIL, EADDRNOTAVAIL},
@@ -713,7 +647,7 @@ namespace litecore { namespace net {
         Assert(err != 0);
         if (err > 0) {
             err = socketToPosixErrCode(err);
-            string errStr = cbl_strerror(err);
+            string errStr = error::_what(error::POSIX, err);
             LOG(Warning, "%s got POSIX error %d \"%s\"",
                 (_isClient ? "ClientSocket" : "ResponderSocket"),
                 err, errStr.c_str());
